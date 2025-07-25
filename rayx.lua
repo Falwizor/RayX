@@ -1,6 +1,7 @@
 -- rayx.lua
--- Minimal Rayfield-like API implementation: Window/Tab/Button/Toggle/Slider/Input/Dropdown + Notify + Flags/Config
--- Send me screenshots/styles to finish polishing visuals & animations.
+-- Minimal Rayfield-like UI lib for Roblox executors (Xeno, Syn, etc.)
+-- Controls: Notify, Tabs, Button, Toggle, Slider, Input, Dropdown (single)
+-- Flags + JSON config, Lucide-like string icons table.
 
 local RayX = {}
 RayX.__index = RayX
@@ -13,43 +14,34 @@ local TextService = game:GetService("TextService")
 local protect = syn and syn.protect_gui or (protectgui) or function(gui) return gui end
 local gethui_safe = gethui or function() return game:GetService("CoreGui") end
 
--- ======= Safe FS wrappers =======
-local canfs = (writefile and readfile and makefolder and isfile and isfolder) and true or false
+-- ===== FS wrappers =====
+local canfs = writefile and readfile and isfile and isfolder and makefolder
 
-local function safe_isfolder(p)
-    if not canfs then return false end
-    local ok, res = pcall(isfolder, p)
-    return ok and res or false
+local function sf(fn, ...)
+    local ok, r = pcall(fn, ...)
+    return ok and r or nil
 end
 
-local function safe_isfile(p)
-    if not canfs then return false end
-    local ok, res = pcall(isfile, p)
-    return ok and res or false
-end
-
-local function safe_makefolder(p)
+local function ensureFolder(path)
     if not canfs then return end
-    pcall(makefolder, p)
+    local dir = path:match("(.+)/[^/]+$")
+    if dir and not sf(isfolder, dir) then sf(makefolder, dir) end
 end
 
-local function safe_writefile(p, d)
-    if not canfs then return end
-    pcall(writefile, p, d)
-end
-
-local function safe_readfile(p)
-    if not canfs then return nil end
-    local ok, res = pcall(readfile, p)
-    return ok and res or nil
-end
-
--- ======= Helpers =======
+-- ===== Helpers =====
 local function roundify(obj, radius)
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, radius or 6)
     c.Parent = obj
-    return c
+end
+
+local function stroke(obj, color, thickness)
+    local s = Instance.new("UIStroke")
+    s.Color = color
+    s.Thickness = thickness or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = obj
+    return s
 end
 
 local function padding(parent, px)
@@ -59,445 +51,399 @@ local function padding(parent, px)
     p.PaddingLeft = UDim.new(0, px)
     p.PaddingRight = UDim.new(0, px)
     p.Parent = parent
-    return p
 end
 
-local function tween(o, t, goal)
-    local info = TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local function label(parent, text, size, color, font, xalign, yalign)
+    local t = Instance.new("TextLabel")
+    t.BackgroundTransparency = 1
+    t.Font = font or Enum.Font.Gotham
+    t.TextSize = size or 14
+    t.TextColor3 = color or Color3.new(1,1,1)
+    t.Text = text or ""
+    t.TextXAlignment = xalign or Enum.TextXAlignment.Left
+    t.TextYAlignment = yalign or Enum.TextYAlignment.Center
+    t.Parent = parent
+    return t
+end
+
+local function tween(o, time, goal)
+    local info = TweenInfo.new(time or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local tw = TweenService:Create(o, info, goal)
     tw:Play()
     return tw
 end
 
-local function createText(parent, text, size, color, font, xalign, yalign)
-    local lbl = Instance.new("TextLabel")
-    lbl.BackgroundTransparency = 1
-    lbl.Font = font or Enum.Font.Gotham
-    lbl.TextSize = size or 14
-    lbl.TextColor3 = color or Color3.new(1,1,1)
-    lbl.Text = text or ""
-    lbl.TextXAlignment = xalign or Enum.TextXAlignment.Left
-    lbl.TextYAlignment = yalign or Enum.TextYAlignment.Center
-    lbl.Parent = parent
-    return lbl
-end
-
-local function measureText(text, size, font, width)
-    local params = Instance.new("GetTextBoundsParams")
-    params.Text = text
-    params.Size = size
-    params.Font = font
-    params.Width = width or math.huge
-    params.RichText = false
-    return TextService:GetTextBoundsAsync(params)
-end
-
--- ======= Theme =======
+-- ===== Theme =====
 local DefaultTheme = {
     Font = Enum.Font.Gotham,
     TextSize = 14,
 
-    Primary = Color3.fromRGB(33, 33, 33),
-    Secondary = Color3.fromRGB(25, 25, 25),
-    Tertiary = Color3.fromRGB(20, 20, 20),
-    Outline = Color3.fromRGB(50, 50, 50),
-    TextColor = Color3.fromRGB(235, 235, 235),
-    Accent = Color3.fromRGB(0, 145, 255),
+    BG       = Color3.fromRGB(30, 30, 30),
+    Sidebar  = Color3.fromRGB(24, 24, 24),
+    Panel    = Color3.fromRGB(40, 40, 40),
+    Panel2   = Color3.fromRGB(34, 34, 34),
+    Stroke   = Color3.fromRGB(55, 55, 55),
+    Text     = Color3.fromRGB(235, 235, 235),
+    Accent   = Color3.fromRGB(255, 75, 75),
 
-    Corner = 6,
-    Padding = 8,
+    Corner   = 8,
+    Padding  = 8,
 
-    AnimationTime = 0.15,
+    Animation = 0.15,
 
-    Notification = {
+    Notify = {
         Width = 320,
-        Padding = 10,
-        Gap = 6
+        Gap = 6,
+        Padding = 10
     }
 }
 
--- ======= Lucide-like icon table (fill with your ids) =======
-local LucideIcons = {
-    -- put your ids here, e.g.:
-    -- ["rewind"] = "rbxassetid://1234567890",
-    -- ["info"] = "rbxassetid://...",
-    -- ["check"] = "rbxassetid://...",
-    rewind = "rbxassetid://4483362458" -- пример, замени на реальный, если нужно
+-- ===== Icons (lucide-like map) =====
+local Lucide = {
+    rewind = "rbxassetid://4483362458"
 }
 
 local function resolveImage(image)
     if typeof(image) == "number" then
-        return "rbxassetid://"..tostring(image)
+        return "rbxassetid://" .. image
     elseif typeof(image) == "string" then
         if tonumber(image) then
             return "rbxassetid://"..image
         end
-        return LucideIcons[image] or "" -- пусто = без картинки
+        return Lucide[image] or ""
     end
     return ""
 end
 
--- ======= Config Manager =======
-local ConfigManager = {}
-ConfigManager.__index = ConfigManager
+-- ===== Config manager =====
+local Config = {}
+Config.__index = Config
 
-function ConfigManager.new(enabled, path)
-    local self = setmetatable({}, ConfigManager)
+function Config.new(enabled, file)
+    local self = setmetatable({}, Config)
     self.Enabled = enabled
-    self.Path = path or "RayXConfig.json"
+    self.File = file or "RayXConfig.json"
     self.Data = {}
-    if self.Enabled then
-        self:Load()
-    end
+    if self.Enabled then self:Load() end
     return self
 end
 
-function ConfigManager:Write(flag, value)
-    if not self.Enabled then return end
-    self.Data[flag] = value
-    self:Save()
-end
-
-function ConfigManager:Read(flag, default)
+function Config:Get(flag, default)
     if not self.Enabled then return default end
     local v = self.Data[flag]
     if v == nil then return default end
     return v
 end
 
-function ConfigManager:Save()
-    if not self.Enabled or not canfs then return end
-    local folder = self.Path:match("(.+)/[^/]+$")
-    if folder and not safe_isfolder(folder) then
-        safe_makefolder(folder)
-    end
-    safe_writefile(self.Path, HttpService:JSONEncode(self.Data))
+function Config:Set(flag, value)
+    if not self.Enabled then return end
+    self.Data[flag] = value
+    self:Save()
 end
 
-function ConfigManager:Load()
+function Config:Save()
     if not self.Enabled or not canfs then return end
-    if safe_isfile(self.Path) then
-        local str = safe_readfile(self.Path)
-        if str and #str > 0 then
-            local ok, decoded = pcall(HttpService.JSONDecode, HttpService, str)
-            if ok and type(decoded) == "table" then
-                self.Data = decoded
-            end
-        end
-    end
+    ensureFolder(self.File)
+    sf(writefile, self.File, HttpService:JSONEncode(self.Data))
 end
 
--- ======= Core =======
+function Config:Load()
+    if not self.Enabled or not canfs or not sf(isfile, self.File) then return end
+    local str = sf(readfile, self.File)
+    if not str or #str == 0 then return end
+    local ok, tbl = pcall(HttpService.JSONDecode, HttpService, str)
+    if ok and type(tbl) == "table" then self.Data = tbl end
+end
+
+-- ===== Root state =====
+local _lastWindow
+
+-- ===== Public: CreateWindow =====
 function RayX:CreateWindow(opts)
     opts = opts or {}
-
     local theme = setmetatable(opts.Theme or {}, { __index = DefaultTheme })
 
-    local gui = Instance.new("ScreenGui")
-    gui.Name = opts.Name or "RayX"
-    gui.IgnoreGuiInset = false
-    gui.ResetOnSpawn = false
-    protect(gui)
-    gui.Parent = gethui_safe()
+    local Root = Instance.new("ScreenGui")
+    Root.Name = opts.Name or "RayX"
+    Root.ResetOnSpawn = false
+    protect(Root); Root.Parent = gethui_safe()
 
-    local main = Instance.new("Frame")
-    main.Name = "Main"
-    main.BackgroundColor3 = theme.Primary
-    main.Size = UDim2.new(0, 600, 0, 400)
-    main.Position = UDim2.new(0.5, -300, 0.5, -200)
-    main.Active = true
-    main.Draggable = true
-    main.Parent = gui
-    roundify(main, theme.Corner)
+    -- main frame
+    local Main = Instance.new("Frame")
+    Main.BackgroundColor3 = theme.BG
+    Main.Size = UDim2.new(0, 720, 0, 470)
+    Main.Position = UDim2.new(0.5, -360, 0.5, -235)
+    Main.Active = true
+    Main.Draggable = true
+    Main.Parent = Root
+    roundify(Main, theme.Corner)
+    stroke(Main, theme.Stroke, 1)
 
-    local header = Instance.new("Frame")
-    header.Name = "Header"
-    header.BackgroundColor3 = theme.Secondary
-    header.Size = UDim2.new(1, 0, 0, 36)
-    header.Parent = main
-    roundify(header, theme.Corner)
+    -- header
+    local Header = Instance.new("Frame")
+    Header.BackgroundTransparency = 1
+    Header.Size = UDim2.new(1, -16, 0, 36)
+    Header.Position = UDim2.new(0, 8, 0, 8)
+    Header.Parent = Main
 
-    local title = createText(header, opts.Name or "RayX Window", theme.TextSize + 2, theme.TextColor, theme.Font)
-    title.Size = UDim2.new(1, -10, 1, 0)
-    title.Position = UDim2.new(0, 10, 0, 0)
-    title.TextXAlignment = Enum.TextXAlignment.Left
+    local Title = label(Header, (opts.Name or "RayX") .. (opts.Subtitle and (" | "..opts.Subtitle) or ""), theme.TextSize + 2, theme.Text, theme.Font)
+    Title.Size = UDim2.new(1, -80, 1, 0)
 
-    local container = Instance.new("Frame")
-    container.Name = "Container"
-    container.BackgroundTransparency = 1
-    container.Size = UDim2.new(1, -16, 1, -52)
-    container.Position = UDim2.new(0, 8, 0, 44)
-    container.Parent = main
+    -- notify holder
+    local NotifyHolder = Instance.new("Frame")
+    NotifyHolder.BackgroundTransparency = 1
+    NotifyHolder.AnchorPoint = Vector2.new(1, 0)
+    NotifyHolder.Position = UDim2.new(1, -10, 0, 10)
+    NotifyHolder.Size = UDim2.new(0, theme.Notify.Width, 1, -20)
+    NotifyHolder.Parent = Root
 
-    local tabButtons = Instance.new("Frame")
-    tabButtons.Name = "TabButtons"
-    tabButtons.BackgroundTransparency = 1
-    tabButtons.Size = UDim2.new(0, 140, 1, 0)
-    tabButtons.Parent = container
+    local NotifyList = Instance.new("UIListLayout")
+    NotifyList.FillDirection = Enum.FillDirection.Vertical
+    NotifyList.SortOrder = Enum.SortOrder.LayoutOrder
+    NotifyList.Padding = UDim.new(0, theme.Notify.Gap)
+    NotifyList.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    NotifyList.VerticalAlignment = Enum.VerticalAlignment.Top
+    NotifyList.Parent = NotifyHolder
 
-    local tabsList = Instance.new("UIListLayout")
-    tabsList.FillDirection = Enum.FillDirection.Vertical
-    tabsList.SortOrder = Enum.SortOrder.LayoutOrder
-    tabsList.Padding = UDim.new(0, 6)
-    tabsList.Parent = tabButtons
+    -- body
+    local Body = Instance.new("Frame")
+    Body.BackgroundTransparency = 1
+    Body.Size = UDim2.new(1, -16, 1, -52)
+    Body.Position = UDim2.new(0, 8, 0, 44)
+    Body.Parent = Main
 
-    local tabContent = Instance.new("Frame")
-    tabContent.Name = "TabContent"
-    tabContent.BackgroundTransparency = 1
-    tabContent.Position = UDim2.new(0, 150, 0, 0)
-    tabContent.Size = UDim2.new(1, -150, 1, 0)
-    tabContent.Parent = container
+    local Sidebar = Instance.new("Frame")
+    Sidebar.BackgroundColor3 = theme.Sidebar
+    Sidebar.Size = UDim2.new(0, 160, 1, 0)
+    Sidebar.Parent = Body
+    roundify(Sidebar, theme.Corner)
 
-    local notifyRoot = Instance.new("Folder")
-    notifyRoot.Name = "Notifications"
-    notifyRoot.Parent = gui
+    local TabButtonsLayout = Instance.new("UIListLayout")
+    TabButtonsLayout.FillDirection = Enum.FillDirection.Vertical
+    TabButtonsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    TabButtonsLayout.Padding = UDim.new(0, 6)
+    TabButtonsLayout.Parent = Sidebar
+    padding(Sidebar, 8)
 
-    -- notifications holder (top-right)
-    local notifyHolder = Instance.new("Frame")
-    notifyHolder.Name = "NotifyHolder"
-    notifyHolder.AnchorPoint = Vector2.new(1, 0)
-    notifyHolder.BackgroundTransparency = 1
-    notifyHolder.Size = UDim2.new(0, theme.Notification.Width, 1, -20)
-    notifyHolder.Position = UDim2.new(1, -10, 0, 10)
-    notifyHolder.Parent = gui
+    local Content = Instance.new("Frame")
+    Content.BackgroundTransparency = 1
+    Content.Position = UDim2.new(0, 168, 0, 0)
+    Content.Size = UDim2.new(1, -168, 1, 0)
+    Content.Parent = Body
 
-    local notifyLayout = Instance.new("UIListLayout")
-    notifyLayout.FillDirection = Enum.FillDirection.Vertical
-    notifyLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    notifyLayout.Padding = UDim.new(0, theme.Notification.Gap)
-    notifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
-    notifyLayout.VerticalAlignment = Enum.VerticalAlignment.Top
-    notifyLayout.Parent = notifyHolder
+    local cfg = Config.new(opts.Config and opts.Config.Enabled, opts.Config and opts.Config.FileName)
 
-    local config = ConfigManager.new(
-        opts.Config and opts.Config.Enabled or false,
-        opts.Config and opts.Config.FileName or "RayXConfig.json"
-    )
-
-    local windowObj = setmetatable({
-        _gui = gui,
-        _main = main,
-        _header = header,
-        _title = title,
-        _tabButtons = tabButtons,
-        _tabContent = tabContent,
-        _notifyRoot = notifyRoot,
-        _notifyHolder = notifyHolder,
-
-        _tabs = {},
+    local window = setmetatable({
         _theme = theme,
-        _config = config,
-        _activeTab = nil,
-    }, {
-        __index = function(t, k)
-            return RayX.Window[k]
-        end
-    })
+        _root = Root,
+        _main = Main,
+        _header = Header,
+        _notifyHolder = NotifyHolder,
+        _content = Content,
+        _sidebar = Sidebar,
+        _tabs = {},
+        _active = nil,
+        _config = cfg
+    }, { __index = RayX.Window })
 
-    return windowObj
+    _lastWindow = window
+    return window
 end
 
--- ======= Window methods =======
+-- allow RayX:Notify({...})
+function RayX:Notify(opts)
+    if not _lastWindow then return end
+    return _lastWindow:Notify(opts)
+end
+
+-- ===== Window methods =====
 RayX.Window = {}
+
+function RayX.Window:Notify(opts)
+    opts = opts or {}
+    local theme = self._theme
+
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = theme.Panel
+    frame.Size = UDim2.new(1, 0, 0, 0)
+    frame.AutomaticSize = Enum.AutomaticSize.Y
+    frame.Parent = self._notifyHolder
+    roundify(frame, theme.Corner)
+    stroke(frame, theme.Stroke, 1)
+    padding(frame, theme.Notify.Padding)
+
+    local imgId = resolveImage(opts.Image)
+    local xOff = 0
+    if imgId ~= "" then
+        local icon = Instance.new("ImageLabel")
+        icon.BackgroundTransparency = 1
+        icon.Image = imgId
+        icon.Size = UDim2.new(0, 18, 0, 18)
+        icon.Position = UDim2.new(0, 0, 0, 2)
+        icon.Parent = frame
+        xOff = 22
+    end
+
+    local title = label(frame, opts.Title or "Notification", theme.TextSize + 1, theme.Text, theme.Font)
+    title.Position = UDim2.new(0, xOff, 0, 0)
+    title.Size = UDim2.new(1, -xOff, 0, theme.TextSize + 4)
+
+    local content = label(frame, opts.Content or "", theme.TextSize, theme.Text, theme.Font, Enum.TextXAlignment.Left, Enum.TextYAlignment.Top)
+    content.Position = UDim2.new(0, xOff, 0, theme.TextSize + 6)
+    content.Size = UDim2.new(1, -xOff, 0, 0)
+    content.AutomaticSize = Enum.AutomaticSize.Y
+    content.TextWrapped = true
+
+    frame.BackgroundTransparency = 1
+    tween(frame, theme.Animation, { BackgroundTransparency = 0 })
+
+    task.spawn(function()
+        task.wait(opts.Duration or 5)
+        tween(frame, theme.Animation, { BackgroundTransparency = 1 })
+        task.wait(theme.Animation)
+        frame:Destroy()
+    end)
+end
 
 function RayX.Window:CreateTab(opts)
     opts = opts or {}
     local theme = self._theme
 
     local btn = Instance.new("TextButton")
-    btn.Name = "TabButton"
     btn.AutoButtonColor = false
-    btn.BackgroundColor3 = theme.Secondary
-    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = theme.Panel2
     btn.Text = ""
-    btn.Parent = self._tabButtons
+    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.Parent = self._sidebar
     roundify(btn, theme.Corner)
+    stroke(btn, theme.Stroke, 1)
 
-    local lbl = createText(btn, opts.Name or "Tab", theme.TextSize, theme.TextColor, theme.Font)
-    lbl.Position = UDim2.new(0, 10, 0, 0)
-    lbl.Size = UDim2.new(1, -20, 1, 0)
+    local text = label(btn, opts.Name or "Tab", theme.TextSize, theme.Text, theme.Font)
+    text.Position = UDim2.new(0, 10, 0, 0)
+    text.Size = UDim2.new(1, -20, 1, 0)
 
     local iconId = resolveImage(opts.Icon)
     if iconId ~= "" then
-        local img = Instance.new("ImageLabel")
-        img.BackgroundTransparency = 1
-        img.Size = UDim2.new(0, 16, 0, 16)
-        img.Position = UDim2.new(0, 10, 0.5, -8)
-        img.Image = iconId
-        img.Parent = btn
+        local icon = Instance.new("ImageLabel")
+        icon.BackgroundTransparency = 1
+        icon.Image = iconId
+        icon.Size = UDim2.new(0, 16, 0, 16)
+        icon.Position = UDim2.new(0, 10, 0.5, -8)
+        icon.Parent = btn
 
-        lbl.Position = UDim2.new(0, 32, 0, 0)
-        lbl.Size = UDim2.new(1, -42, 1, 0)
+        text.Position = UDim2.new(0, 32, 0, 0)
+        text.Size = UDim2.new(1, -42, 1, 0)
     end
 
-    local content = Instance.new("ScrollingFrame")
-    content.Name = "Content"
-    content.BackgroundColor3 = theme.Tertiary
-    content.BorderSizePixel = 0
-    content.ScrollBarThickness = 4
-    content.ScrollBarImageTransparency = 0.5
-    content.Visible = false
-    content.CanvasSize = UDim2.new(0,0,0,0)
-    content.Size = UDim2.new(1, 0, 1, 0)
-    content.Parent = self._tabContent
-    roundify(content, theme.Corner)
+    local page = Instance.new("ScrollingFrame")
+    page.BackgroundTransparency = 1
+    page.ScrollBarThickness = 4
+    page.ScrollBarImageTransparency = 0.5
+    page.Visible = false
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.Parent = self._content
+
+    local layout = Instance.new("UIListLayout")
+    layout.FillDirection = Enum.FillDirection.Vertical
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, theme.Padding)
+    layout.Parent = page
+
+    padding(page, theme.Padding)
+
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
+    end)
+
+    local tab = setmetatable({
+        _window = self,
+        _theme = theme,
+        _config = self._config,
+        _btn = btn,
+        _page = page,
+        _layout = layout,
+        _controls = {}
+    }, { __index = RayX.Tab })
+
+    table.insert(self._tabs, tab)
+
+    btn.MouseButton1Click:Connect(function()
+        for _, t in ipairs(self._tabs) do
+            t._page.Visible = false
+            t._btn.BackgroundColor3 = theme.Panel2
+        end
+        page.Visible = true
+        btn.BackgroundColor3 = theme.Accent
+        self._active = tab
+    end)
+
+    if not self._active then
+        btn:MouseButton1Click()
+    end
+
+    return tab
+end
+
+-- ===== Tab controls =====
+RayX.Tab = {}
+
+-- Section (как на скрине блоки)
+function RayX.Tab:_sectionContainer(titleText)
+    local theme = self._theme
+
+    local cont = Instance.new("Frame")
+    cont.BackgroundColor3 = theme.Panel
+    cont.Size = UDim2.new(1, 0, 0, 0)
+    cont.AutomaticSize = Enum.AutomaticSize.Y
+    cont.Parent = self._page
+    roundify(cont, theme.Corner)
+    stroke(cont, theme.Stroke, 1)
+    padding(cont, theme.Padding)
+
+    if titleText then
+        local ttl = label(cont, titleText, theme.TextSize + 1, theme.Text, theme.Font)
+        ttl.Size = UDim2.new(1, 0, 0, theme.TextSize + 6)
+    end
 
     local list = Instance.new("UIListLayout")
     list.FillDirection = Enum.FillDirection.Vertical
     list.SortOrder = Enum.SortOrder.LayoutOrder
-    list.Padding = UDim.new(0, theme.Padding)
-    list.Parent = content
+    list.Padding = UDim.new(0, 6)
+    list.Parent = cont
 
-    padding(content, theme.Padding)
-
-    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        content.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 20)
-    end)
-
-    local tabObj = setmetatable({
-        _window = self,
-        _button = btn,
-        _label = lbl,
-        _content = content,
-        _list = list,
-        _theme = theme,
-        _config = self._config,
-        _controls = {}
-    }, {
-        __index = function(t, k)
-            return RayX.Tab[k]
-        end
-    })
-
-    table.insert(self._tabs, tabObj)
-
-    btn.MouseButton1Click:Connect(function()
-        self:ActivateTab(tabObj)
-    end)
-
-    if not self._activeTab then
-        self:ActivateTab(tabObj)
-    end
-
-    return tabObj
+    return cont
 end
-
-function RayX.Window:ActivateTab(tabObj)
-    for _, t in ipairs(self._tabs) do
-        t._content.Visible = false
-        t._button.BackgroundColor3 = self._theme.Secondary
-    end
-    tabObj._content.Visible = true
-    tabObj._button.BackgroundColor3 = self._theme.Accent
-    self._activeTab = tabObj
-end
-
-function RayX:Notify(opts)
-    local win = self -- allow RayX:Notify if you stored the window instance in self?
-    -- To keep API identical to Rayfield, expose Notify on the "library" object, not window.
-    -- So we store last created window globally (simple approach) OR return the root lib.
-end
-
--- We want RayX:Notify({...}). So store the current (last) window reference:
-local _lastWindow = nil
-
-function RayX:CreateWindow(opts)
-    local w = setmetatable(RayX.CreateWindow(self, opts), {})
-    _lastWindow = w
-    return w
-end
-
-function RayX:Notify(opts)
-    if not _lastWindow then return end
-    return _lastWindow:Notify(opts)
-end
-
-function RayX.Window:Notify(opts)
-    opts = opts or {}
-    local theme = self._theme
-
-    local holder = self._notifyHolder
-    local frame = Instance.new("Frame")
-    frame.BackgroundColor3 = theme.Secondary
-    frame.Size = UDim2.new(1, 0, 0, 0)
-    frame.AutomaticSize = Enum.AutomaticSize.Y
-    frame.Parent = holder
-    roundify(frame, theme.Corner)
-    padding(frame, theme.Notification.Padding)
-
-    local title = createText(frame, opts.Title or "Notification", theme.TextSize + 1, theme.TextColor, theme.Font)
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Size = UDim2.new(1, 0, 0, theme.TextSize + 4)
-
-    local content = createText(frame, opts.Content or "", theme.TextSize, theme.TextColor, theme.Font)
-    content.TextXAlignment = Enum.TextXAlignment.Left
-    content.TextYAlignment = Enum.TextYAlignment.Top
-    content.TextWrapped = true
-    content.Size = UDim2.new(1, 0, 0, 0)
-    content.AutomaticSize = Enum.AutomaticSize.Y
-    content.Position = UDim2.new(0, 0, 0, theme.TextSize + 8)
-
-    local imgId = resolveImage(opts.Image)
-    if imgId ~= "" then
-        local img = Instance.new("ImageLabel")
-        img.BackgroundTransparency = 1
-        img.Size = UDim2.new(0, 18, 0, 18)
-        img.Position = UDim2.new(0, 0, 0, 0)
-        img.Image = imgId
-        img.Parent = frame
-        -- shift text
-        title.Position = UDim2.new(0, 24, 0, 0)
-        title.Size = UDim2.new(1, -24, 0, theme.TextSize + 4)
-        content.Position = UDim2.new(0, 24, 0, theme.TextSize + 8)
-        content.Size = UDim2.new(1, -24, 0, 0)
-    end
-
-    frame.BackgroundTransparency = 1
-    tween(frame, theme.AnimationTime, { BackgroundTransparency = 0 })
-
-    task.spawn(function()
-        task.wait(opts.Duration or 5)
-        tween(frame, theme.AnimationTime, { BackgroundTransparency = 1 })
-        task.wait(theme.AnimationTime)
-        frame:Destroy()
-    end)
-
-    return frame
-end
-
--- ======= Tab methods (controls) =======
-RayX.Tab = {}
 
 -- Button
 function RayX.Tab:CreateButton(opts)
     opts = opts or {}
     local theme = self._theme
 
-    local btn = Instance.new("TextButton")
-    btn.Name = opts.Name or "Button"
-    btn.AutoButtonColor = false
-    btn.BackgroundColor3 = theme.Secondary
-    btn.Text = ""
-    btn.Size = UDim2.new(1, 0, 0, 36)
-    btn.Parent = self._content
-    roundify(btn, theme.Corner)
+    local cont = self:_sectionContainer()
+    cont.Size = UDim2.new(1, 0, 0, 40)
 
-    local lbl = createText(btn, opts.Name or "Button", theme.TextSize, theme.TextColor, theme.Font)
-    lbl.Size = UDim2.new(1, -16, 1, 0)
+    local btn = Instance.new("TextButton")
+    btn.AutoButtonColor = false
+    btn.BackgroundColor3 = theme.Panel2
+    btn.Text = ""
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.Parent = cont
+    roundify(btn, theme.Corner)
+    stroke(btn, theme.Stroke, 1)
+
+    local lbl = label(btn, opts.Name or "Button", theme.TextSize, theme.Text, theme.Font)
     lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.Size = UDim2.new(1, -16, 1, 0)
 
     btn.MouseButton1Click:Connect(function()
-        if opts.Callback then
-            task.spawn(opts.Callback)
-        end
+        if opts.Callback then task.spawn(opts.Callback) end
     end)
 
     local obj = {
+        Frame = cont,
         Button = btn,
-        Label = lbl,
-        Set = function(self2, text)
-            lbl.Text = text
-        end
+        Label  = lbl,
+        Set = function(_, t) lbl.Text = t end
     }
     table.insert(self._controls, obj)
     return obj
@@ -508,63 +454,45 @@ function RayX.Tab:CreateToggle(opts)
     opts = opts or {}
     local theme = self._theme
     local flag = opts.Flag
+    local value = self._config:Get(flag, opts.CurrentValue or false)
 
-    local defaultValue = opts.CurrentValue or false
-    defaultValue = self._config:Read(flag, defaultValue)
+    local cont = self:_sectionContainer()
+    cont.Size = UDim2.new(1, 0, 0, 40)
 
-    local holder = Instance.new("Frame")
-    holder.BackgroundColor3 = theme.Secondary
-    holder.Size = UDim2.new(1, 0, 0, 36)
-    holder.Parent = self._content
-    roundify(holder, theme.Corner)
-
-    local lbl = createText(holder, opts.Name or "Toggle", theme.TextSize, theme.TextColor, theme.Font)
-    lbl.Size = UDim2.new(1, -50, 1, 0)
-    lbl.Position = UDim2.new(0, 8, 0, 0)
+    local lbl = label(cont, opts.Name or "Toggle", theme.TextSize, theme.Text, theme.Font)
+    lbl.Size = UDim2.new(1, -60, 1, 0)
 
     local btn = Instance.new("TextButton")
-    btn.Name = "Toggle"
     btn.Text = ""
     btn.AutoButtonColor = false
-    btn.BackgroundColor3 = defaultValue and theme.Accent or theme.Outline
-    btn.Size = UDim2.new(0, 36, 0, 18)
-    btn.Position = UDim2.new(1, -44, 0.5, -9)
-    btn.Parent = holder
-    roundify(btn, 9)
+    btn.BackgroundColor3 = value and theme.Accent or theme.Stroke
+    btn.Size = UDim2.new(0, 40, 0, 20)
+    btn.Position = UDim2.new(1, -48, 0.5, -10)
+    btn.Parent = cont
+    roundify(btn, 10)
 
     local knob = Instance.new("Frame")
     knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    knob.Size = UDim2.new(0, 14, 0, 14)
-    knob.Position = UDim2.new(defaultValue and 1 or 0, defaultValue and -16 or 2, 0.5, -7)
+    knob.Size = UDim2.new(0, 16, 0, 16)
+    knob.Position = UDim2.new(value and 1 or 0, value and -18 or 2, 0.5, -8)
     knob.Parent = btn
-    roundify(knob, 7)
-
-    local state = defaultValue
+    roundify(knob, 8)
 
     local function set(v, fire)
-        state = v
-        self._config:Write(flag, v)
-        tween(btn, theme.AnimationTime, { BackgroundColor3 = v and theme.Accent or theme.Outline })
-        tween(knob, theme.AnimationTime, {
-            Position = UDim2.new(v and 1 or 0, v and -16 or 2, 0.5, -7)
-        })
-        if fire and opts.Callback then
-            task.spawn(opts.Callback, v)
-        end
+        value = v
+        self._config:Set(flag, v)
+        tween(btn, theme.Animation, { BackgroundColor3 = v and theme.Accent or theme.Stroke })
+        tween(knob, theme.Animation, { Position = UDim2.new(v and 1 or 0, v and -18 or 2, 0.5, -8) })
+        if fire and opts.Callback then task.spawn(opts.Callback, v) end
     end
 
-    btn.MouseButton1Click:Connect(function()
-        set(not state, true)
-    end)
+    btn.MouseButton1Click:Connect(function() set(not value, true) end)
 
-    -- set initial without firing callback
-    set(state, false)
+    set(value, false)
 
     local obj = {
-        Frame = holder,
-        Label = lbl,
-        Button = btn,
-        Get = function() return state end,
+        Frame = cont,
+        Get = function() return value end,
         Set = function(_, v) set(v, true) end
     }
     table.insert(self._controls, obj)
@@ -580,29 +508,22 @@ function RayX.Tab:CreateSlider(opts)
     local min, max = table.unpack(opts.Range or {0, 100})
     local inc = opts.Increment or 1
     local suffix = opts.Suffix or ""
-    local defaultVal = opts.CurrentValue or min
-    defaultVal = self._config:Read(flag, defaultVal)
 
-    local holder = Instance.new("Frame")
-    holder.BackgroundColor3 = theme.Secondary
-    holder.Size = UDim2.new(1, 0, 0, 56)
-    holder.Parent = self._content
-    roundify(holder, theme.Corner)
-    padding(holder, 6)
+    local value = self._config:Get(flag, opts.CurrentValue or min)
 
-    local nameLbl = createText(holder, opts.Name or "Slider", theme.TextSize, theme.TextColor, theme.Font)
-    nameLbl.Size = UDim2.new(1, -8, 0, theme.TextSize + 4)
-    nameLbl.Position = UDim2.new(0, 4, 0, 0)
+    local cont = self:_sectionContainer()
+    cont.Size = UDim2.new(1, 0, 0, 70)
 
-    local valueLbl = createText(holder, "", theme.TextSize, theme.TextColor, theme.Font, Enum.TextXAlignment.Right)
-    valueLbl.Size = UDim2.new(1, -8, 0, theme.TextSize + 4)
-    valueLbl.Position = UDim2.new(0, 4, 0, 0)
+    local nameLbl = label(cont, opts.Name or "Slider", theme.TextSize, theme.Text, theme.Font)
+    nameLbl.Size = UDim2.new(1, 0, 0, theme.TextSize + 6)
+
+    local valueLbl = label(cont, "", theme.TextSize, theme.Text, theme.Font, Enum.TextXAlignment.Right)
+    valueLbl.Size = UDim2.new(1, 0, 0, theme.TextSize + 6)
 
     local bar = Instance.new("Frame")
-    bar.BackgroundColor3 = theme.Tertiary
-    bar.Size = UDim2.new(1, -8, 0, 6)
-    bar.Position = UDim2.new(0, 4, 0, theme.TextSize + 12)
-    bar.Parent = holder
+    bar.BackgroundColor3 = theme.Panel2
+    bar.Size = UDim2.new(1, 0, 0, 6)
+    bar.Parent = cont
     roundify(bar, 3)
 
     local fill = Instance.new("Frame")
@@ -611,8 +532,13 @@ function RayX.Tab:CreateSlider(opts)
     fill.Parent = bar
     roundify(fill, 3)
 
+    local knob = Instance.new("Frame")
+    knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    knob.Size = UDim2.new(0, 10, 0, 10)
+    knob.Parent = bar
+    roundify(knob, 5)
+
     local dragging = false
-    local value = defaultVal
 
     local function snap(v)
         v = math.clamp(v, min, max)
@@ -620,283 +546,200 @@ function RayX.Tab:CreateSlider(opts)
         return math.clamp(v, min, max)
     end
 
-    local function updateVisual(v)
+    local function updateUI(v)
         local pct = (v - min) / (max - min)
         fill.Size = UDim2.new(pct, 0, 1, 0)
-        valueLbl.Text = tostring(v)..(suffix ~= "" and (" "..suffix) or "")
+        knob.Position = UDim2.new(pct, -5, 0.5, -5)
+        valueLbl.Text = tostring(v) .. (suffix ~= "" and (" "..suffix) or "")
     end
 
     local function set(v, fire)
-        v = snap(v)
-        value = v
-        self._config:Write(flag, v)
-        updateVisual(v)
-        if fire and opts.Callback then
-            task.spawn(opts.Callback, v)
-        end
+        value = snap(v)
+        self._config:Set(flag, value)
+        updateUI(value)
+        if fire and opts.Callback then task.spawn(opts.Callback, value) end
     end
 
-    updateVisual(value)
+    local function mouseToValue(x)
+        local rel = (x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X
+        return min + (max - min) * rel
+    end
 
-    bar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    bar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = true
-            local rel = (input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X
-            set(min + (max - min) * rel, true)
+            set(mouseToValue(i.Position.X), true)
+        end
+    end)
+    bar.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+            set(mouseToValue(i.Position.X), true)
         end
     end)
 
-    bar.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local rel = (input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X
-            set(min + (max - min) * rel, true)
-        end
-    end)
+    set(value, false)
 
     local obj = {
-        Frame = holder,
+        Frame = cont,
         Get = function() return value end,
-        Set = function(_, v) set(v, true) end,
+        Set = function(_, v) set(v, true) end
     }
     table.insert(self._controls, obj)
     return obj
 end
 
--- Input (TextBox)
+-- Input
 function RayX.Tab:CreateInput(opts)
     opts = opts or {}
     local theme = self._theme
     local flag = opts.Flag
 
-    local defaultVal = opts.CurrentValue or ""
-    defaultVal = self._config:Read(flag, defaultVal)
+    local value = self._config:Get(flag, opts.CurrentValue or "")
 
-    local holder = Instance.new("Frame")
-    holder.BackgroundColor3 = theme.Secondary
-    holder.Size = UDim2.new(1, 0, 0, 56)
-    holder.Parent = self._content
-    roundify(holder, theme.Corner)
-    padding(holder, 6)
+    local cont = self:_sectionContainer()
+    cont.Size = UDim2.new(1, 0, 0, 70)
 
-    local nameLbl = createText(holder, opts.Name or "Input", theme.TextSize, theme.TextColor, theme.Font)
-    nameLbl.Size = UDim2.new(1, -8, 0, theme.TextSize + 4)
-    nameLbl.Position = UDim2.new(0, 4, 0, 0)
+    local nameLbl = label(cont, opts.Name or "Input", theme.TextSize, theme.Text, theme.Font)
+    nameLbl.Size = UDim2.new(1, 0, 0, theme.TextSize + 6)
 
     local box = Instance.new("TextBox")
-    box.BackgroundColor3 = theme.Tertiary
-    box.TextColor3 = theme.TextColor
-    box.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+    box.BackgroundColor3 = theme.Panel2
     box.Font = theme.Font
     box.TextSize = theme.TextSize
+    box.TextColor3 = theme.Text
     box.PlaceholderText = opts.PlaceholderText or ""
     box.ClearTextOnFocus = opts.RemoveTextAfterFocusLost or false
-    box.Text = defaultVal
-    box.Size = UDim2.new(1, -8, 0, 26)
-    box.Position = UDim2.new(0, 4, 0, theme.TextSize + 10)
-    box.Parent = holder
+    box.Text = value
+    box.Size = UDim2.new(1, 0, 0, 28)
+    box.Parent = cont
     roundify(box, theme.Corner)
+    stroke(box, theme.Stroke, 1)
 
     local function set(v, fire)
-        box.Text = v
-        self._config:Write(flag, v)
-        if fire and opts.Callback then
-            task.spawn(opts.Callback, v)
-        end
+        value = v
+        self._config:Set(flag, value)
+        if fire and opts.Callback then task.spawn(opts.Callback, v) end
     end
 
-    box.FocusLost:Connect(function(enter)
-        set(box.Text, true)
-    end)
+    box.FocusLost:Connect(function() set(box.Text, true) end)
 
     local obj = {
-        Frame = holder,
-        Get = function() return box.Text end,
-        Set = function(_, v) set(v, true) end,
+        Frame = cont,
+        Get = function() return value end,
+        Set = function(_, v) box.Text = v; set(v, true) end
     }
     table.insert(self._controls, obj)
     return obj
 end
 
--- Dropdown
+-- Dropdown (single)
 function RayX.Tab:CreateDropdown(opts)
     opts = opts or {}
     local theme = self._theme
     local flag = opts.Flag
-
     local options = opts.Options or {}
-    local multiple = opts.MultipleOptions or false
-    local current = opts.CurrentOption or (multiple and {} or (options[1] and {options[1]} or {}))
-    current = self._config:Read(flag, current)
 
-    local holder = Instance.new("Frame")
-    holder.BackgroundColor3 = theme.Secondary
-    holder.Size = UDim2.new(1, 0, 0, 40)
-    holder.Parent = self._content
-    roundify(holder, theme.Corner)
-    padding(holder, 6)
+    local current = self._config:Get(flag, opts.CurrentOption or { options[1] }) -- table
+    if type(current) ~= "table" then current = { current } end
 
-    local nameLbl = createText(holder, opts.Name or "Dropdown", theme.TextSize, theme.TextColor, theme.Font)
-    nameLbl.Size = UDim2.new(1, -30, 1, 0)
-    nameLbl.Position = UDim2.new(0, 4, 0, 0)
+    local cont = self:_sectionContainer()
+    cont.Size = UDim2.new(1, 0, 0, 70)
 
-    local openBtn = Instance.new("TextButton")
-    openBtn.Text = ""
-    openBtn.AutoButtonColor = false
-    openBtn.BackgroundTransparency = 1
-    openBtn.Size = UDim2.new(0, 24, 1, 0)
-    openBtn.Position = UDim2.new(1, -24, 0, 0)
-    openBtn.Parent = holder
-    local arrow = createText(openBtn, "▼", theme.TextSize, theme.TextColor, theme.Font, Enum.TextXAlignment.Center, Enum.TextYAlignment.Center)
-    arrow.Size = UDim2.new(1, 0, 1, 0)
+    local nameLbl = label(cont, opts.Name or "Dropdown", theme.TextSize, theme.Text, theme.Font)
+    nameLbl.Size = UDim2.new(1, 0, 0, theme.TextSize + 6)
 
-    local listFrame = Instance.new("Frame")
-    listFrame.BackgroundColor3 = theme.Tertiary
-    listFrame.Size = UDim2.new(1, 0, 0, 0)
-    listFrame.Position = UDim2.new(0, 0, 1, 4)
-    listFrame.Visible = false
-    listFrame.Parent = holder
-    roundify(listFrame, theme.Corner)
-    padding(listFrame, 6)
+    local drop = Instance.new("TextButton")
+    drop.AutoButtonColor = false
+    drop.BackgroundColor3 = theme.Panel2
+    drop.Text = ""
+    drop.Size = UDim2.new(1, 0, 0, 28)
+    drop.Parent = cont
+    roundify(drop, theme.Corner)
+    stroke(drop, theme.Stroke, 1)
 
-    local listLayout = Instance.new("UIListLayout")
-    listLayout.FillDirection = Enum.FillDirection.Vertical
-    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    listLayout.Padding = UDim.new(0, 4)
-    listLayout.Parent = listFrame
+    local text = label(drop, current[1] or "", theme.TextSize, theme.Text, theme.Font, Enum.TextXAlignment.Left)
+    text.Size = UDim2.new(1, -24, 1, 0)
+    text.Position = UDim2.new(0, 8, 0, 0)
 
-    local function isSelected(opt)
-        for _, v in ipairs(current) do
-            if v == opt then return true end
+    local arrow = label(drop, "▼", theme.TextSize, theme.Text, theme.Font, Enum.TextXAlignment.Right)
+    arrow.Size = UDim2.new(1, -6, 1, 0)
+
+    local list = Instance.new("Frame")
+    list.BackgroundColor3 = theme.Panel2
+    list.Visible = false
+    list.Size = UDim2.new(1, 0, 0, 0)
+    list.Position = UDim2.new(0, 0, 1, 4)
+    list.Parent = cont
+    roundify(list, theme.Corner)
+    stroke(list, theme.Stroke, 1)
+    padding(list, 6)
+
+    local layout = Instance.new("UIListLayout")
+    layout.Parent = list
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 4)
+
+    local function rebuild()
+        for _, c in ipairs(list:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
         end
-        return false
-    end
-
-    local function updateLabel()
-        if #current == 0 then
-            nameLbl.Text = opts.Name or "Dropdown"
-        else
-            nameLbl.Text = (opts.Name or "Dropdown") .. " : " .. table.concat(current, ", ")
-        end
-    end
-
-    local function fireCallback()
-        if opts.Callback then
-            local copy = {}
-            for i,v in ipairs(current) do copy[i] = v end
-            task.spawn(opts.Callback, copy)
-        end
-    end
-
-    local function save()
-        self._config:Write(flag, current)
-    end
-
-    local function toggleOpt(opt)
-        if multiple then
-            if isSelected(opt) then
-                for i,v in ipairs(current) do
-                    if v == opt then table.remove(current, i) break end
-                end
-            else
-                table.insert(current, opt)
-            end
-        else
-            current = { opt }
-            listFrame.Visible = false
-        end
-        updateLabel()
-        save()
-        fireCallback()
-    end
-
-    local function rebuildList()
-        for _, c in ipairs(listFrame:GetChildren()) do
-            if c:IsA("TextButton") or c:IsA("Frame") then
-                c:Destroy()
-            end
-        end
-
         for _, opt in ipairs(options) do
             local b = Instance.new("TextButton")
             b.AutoButtonColor = false
-            b.BackgroundColor3 = theme.Secondary
+            b.BackgroundColor3 = theme.Panel
             b.Text = ""
-            b.Size = UDim2.new(1, 0, 0, 26)
-            b.Parent = listFrame
+            b.Size = UDim2.new(1, 0, 0, 24)
+            b.Parent = list
             roundify(b, theme.Corner)
+            stroke(b, theme.Stroke, 1)
 
-            local lbl = createText(b, opt, theme.TextSize, theme.TextColor, theme.Font)
-            lbl.Size = UDim2.new(1, -8, 1, 0)
-            lbl.Position = UDim2.new(0, 4, 0, 0)
-
-            local check = createText(b, isSelected(opt) and "✔" or "", theme.TextSize, theme.TextColor, theme.Font, Enum.TextXAlignment.Right)
-            check.Size = UDim2.new(1, -8, 1, 0)
+            local l = label(b, opt, theme.TextSize, theme.Text, theme.Font)
+            l.Size = UDim2.new(1, -8, 1, 0)
+            l.Position = UDim2.new(0, 8, 0, 0)
 
             b.MouseButton1Click:Connect(function()
-                toggleOpt(opt)
-                check.Text = isSelected(opt) and "✔" or ""
+                current = { opt }
+                text.Text = opt
+                self._config:Set(flag, current)
+                if opts.Callback then task.spawn(opts.Callback, current) end
+                list.Visible = false
             end)
         end
-
-        task.wait() -- wait a frame for layout to update
-        listFrame.Size = UDim2.new(1, 0, 0, listLayout.AbsoluteContentSize.Y + 12)
+        task.wait()
+        list.Size = UDim2.new(1, 0, 0, layout.AbsoluteContentSize.Y + 12)
     end
 
-    openBtn.MouseButton1Click:Connect(function()
-        listFrame.Visible = not listFrame.Visible
-        rebuildList()
+    drop.MouseButton1Click:Connect(function()
+        list.Visible = not list.Visible
+        if list.Visible then rebuild() end
     end)
 
-    updateLabel()
-
     local obj = {
-        Frame = holder,
-        SetOptions = function(_, newOpts)
-            options = newOpts or {}
-            if not multiple and #current > 1 then
-                current = { current[1] }
-                save()
-            end
-            rebuildList()
-            updateLabel()
-        end,
-        Get = function() 
+        Frame = cont,
+        Get = function()
             local copy = {}
             for i,v in ipairs(current) do copy[i] = v end
             return copy
         end,
         Set = function(_, tbl)
-            if multiple then
-                current = tbl or {}
-            else
-                current = { (tbl and tbl[1]) or options[1] }
-            end
-            save()
-            updateLabel()
-            fireCallback()
-            rebuildList()
+            current = { tbl and tbl[1] or options[1] }
+            text.Text = current[1] or ""
+            self._config:Set(flag, current)
+            if opts.Callback then task.spawn(opts.Callback, current) end
         end,
-        Open = function()
-            listFrame.Visible = true
-            rebuildList()
-        end,
-        Close = function()
-            listFrame.Visible = false
+        SetOptions = function(_, newOpts)
+            options = newOpts
+            rebuild()
         end
     }
-
     table.insert(self._controls, obj)
     return obj
 end
 
--- ======= Root object =======
+-- ====== root export ======
 local Root = {}
 setmetatable(Root, RayX)
-
 return Root
